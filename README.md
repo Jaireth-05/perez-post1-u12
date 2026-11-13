@@ -34,7 +34,7 @@ Análisis realizado **antes** de escribir código de patrones.
 ### RF3: Notificación a varios interesados
 
 - **Qué varía:** quiénes reaccionan a un cambio de estado y cómo (el empleado recibe el resultado, Contabilidad solo las aprobaciones, auditoría todos los cambios, y a futuro un panel de métricas).
-- **Patrón:** Observer (eventos de Spring: `ApplicationEventPublisher` y `@EventListener`).
+- **Patrón:** Observer, con una interfaz propia `ObservadorCambioEstado` implementada por un `@Component` por interesado; Spring inyecta la lista completa de observadores.
 - **Justificación:** el servicio publica el cambio de estado sin conocer a los suscriptores y cada uno decide si le interesa, de modo que sumar un nuevo interesado no modifica al emisor.
 ### Cómo se componen los patrones
 
@@ -80,6 +80,32 @@ src/main/java/com/empresa/reembolsos/
 **Orden entre documentos y monto.** Cuestan lo mismo; se pone primero documentos porque es lo que el empleado corrige más rápido.
 
 **Corrección detectada.** El borrador original comparaba solo el mes (`getMonth()`), de modo que marzo de 2025 y marzo de 2026 contaban como duplicados. Se cambió a `YearMonth`, que compara mes y año.
+
+### Decisión 2: mecanismo de selección de la calculadora (RF2)
+
+**Elegido:** un `Map<CategoriaGasto, CalculadoraReembolso>` construido en `SelectorCalculadora` a partir de la `List<CalculadoraReembolso>` que Spring inyecta con todos los `@Component` que implementan la interfaz.
+
+**Alternativa descartada:** un método con `switch` sobre `CategoriaGasto`.
+
+**Por qué.** El RF2 exige agregar categorías nuevas ("bienestar") sin modificar el cálculo de las existentes. Con el `switch`, cada categoría nueva obliga a editar el método selector, que ya está escrito y probado. Con el mapa, agregar una categoría es: una constante en el enum y una clase nueva anotada con `@Component`; Spring la detecta y el selector la registra sin tocar una sola línea existente (Open/Closed).
+
+**Qué se pierde.** La selección deja de ser visible en un solo lugar: para saber qué categorías existen hay que buscar las implementaciones de la interfaz. Y el compilador deja de avisar si falta una categoría, como sí haría un `switch` exhaustivo sobre un enum. Se compensa con la prueba `todasLasCategoriasTienenCalculadora`, que falla si se agrega un valor al enum sin su calculadora.
+
+**Fallo temprano.** `Collectors.toMap` lanza excepción al arrancar si dos calculadoras declaran la misma categoría, en vez de que una pise silenciosamente a la otra.
+
+**Simplificación declarada.** Los topes "mensual" y "anual" se aplican por solicitud y no sobre lo ya reembolsado en el periodo, porque eso exigiría consultar el historial desde la calculadora.
+
+**Topes acumulados mensual y anual en las calculadoras.** Habrían requerido inyectar un repositorio o el historial en cada estrategia, mezclando cálculo con acceso a datos. Se descartó y los topes se aplican por solicitud. Se reconsideraría si Finanzas confirma que el acumulado es una regla del negocio y no solo una descripción aproximada.
+
+### Decisión 3: capas simples para persistencia; notificación sin cambios (ADR-001)
+
+**Decisión.** `SolicitudReembolsoService` sigue dependiendo directamente de `RepositorioSolicitudesJpa`, sin interfaz de puerto. Para la notificación no se cambia nada: `ObservadorCambioEstado` ya es el punto de extensión para la integración de Contabilidad del próximo trimestre.
+
+**Por qué.** No hay plan de cambiar de motor de base de datos, y el dominio ya está aislado de JPA por la entidad separada, así que un puerto sería una abstracción especulativa. La notificación es la única dependencia con un cambio conocido y ya tiene su abstracción.
+
+**Consecuencias.** Se acepta la deuda de introducir el puerto retroactivamente si aparece un segundo motor. Además, la notificación síncrona con captura de excepciones no garantiza la entrega de un pago a una API externa lenta o caída; se decidirá al implementar esa integración.
+
+Detalle completo en [`docs/adr/ADR-001.md`](docs/adr/ADR-001.md).
 
 ## Cómo ejecutar
 
