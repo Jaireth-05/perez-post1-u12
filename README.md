@@ -67,9 +67,20 @@ src/main/java/com/empresa/reembolsos/
 
 ### Decisiones de diseño
 
-- El **dominio no depende de Spring ni de JPA**. Por eso la persistencia usará una entidad propia en `infraestructura` con mapeo hacia el dominio.
-- `estado` inicia en `PENDIENTE`, porque toda solicitud nueva nace pendiente.
-- `diasViaje` solo aplica a la categoría `VIAJE`. Es una simplificación consciente del modelo actual.
+### Decisión 1: orden de los validadores en la cadena (RF1)
+
+**Orden elegido:** documentos soporte → monto máximo → duplicados.
+
+**Por qué el validador de duplicados va último.** Los dos primeros validadores son comparaciones baratas en memoria (un booleano y una búsqueda en un mapa). El de duplicados recorre la lista de solicitudes pendientes del empleado, que crece con su historial. Al ubicarlo al final, una solicitud sin documentos o con monto excedido se rechaza sin recorrer esa lista (fail-fast).
+
+**Qué se pierde.** El empleado recibe un solo motivo de rechazo por intento: si le faltan documentos y además tiene un duplicado, se entera del segundo solo después de corregir el primero. Acumular todos los errores resolvería eso, pero dejaría de ser una cadena que se detiene y bastaría una `List<Validador>`.
+
+**Límite del ahorro.** El servicio carga la lista de pendientes antes de invocar la cadena, así que lo que se ahorra es el recorrido, no la consulta a la base de datos.
+
+**Orden entre documentos y monto.** Cuestan lo mismo; se pone primero documentos porque es lo que el empleado corrige más rápido.
+
+**Corrección detectada.** El borrador original comparaba solo el mes (`getMonth()`), de modo que marzo de 2025 y marzo de 2026 contaban como duplicados. Se cambió a `YearMonth`, que compara mes y año.
+
 ## Cómo ejecutar
 
 ```bash
