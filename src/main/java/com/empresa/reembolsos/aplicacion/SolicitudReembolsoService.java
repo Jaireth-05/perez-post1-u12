@@ -2,14 +2,13 @@ package com.empresa.reembolsos.aplicacion;
 
 import com.empresa.reembolsos.dominio.EstadoSolicitud;
 import com.empresa.reembolsos.dominio.SolicitudReembolso;
+import com.empresa.reembolsos.infraestructura.RepositorioSolicitudesJpa;
 import com.empresa.reembolsos.procesamiento.calculo.SelectorCalculadora;
 import com.empresa.reembolsos.procesamiento.notificacion.ObservadorCambioEstado;
 import com.empresa.reembolsos.procesamiento.validacion.CadenaValidadores;
-import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.*;
-
 import java.util.List;
+import org.springframework.stereotype.Service;
+
 @Service
 public class SolicitudReembolsoService {
     private final CadenaValidadores validadores;
@@ -46,4 +45,3 @@ public class SolicitudReembolsoService {
         return guardada;
     }
 }
-

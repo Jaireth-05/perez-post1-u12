@@ -1,18 +1,29 @@
 package com.empresa.reembolsos.dominio;
 
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
+@Entity
 public class SolicitudReembolso {
 
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     private String empleadoId;
+    @Enumerated(EnumType.STRING)
     private CategoriaGasto categoria;
     private BigDecimal montoSolicitado;
     private BigDecimal montoAprobado;
     private LocalDate fechaGasto;
     private int diasViaje;
     private boolean documentosSoporte;
+    @Enumerated(EnumType.STRING)
     private EstadoSolicitud estado = EstadoSolicitud.PENDIENTE;
 
     public Long getId() { return id; }

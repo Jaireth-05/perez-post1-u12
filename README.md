@@ -107,6 +107,19 @@ src/main/java/com/empresa/reembolsos/
 
 Detalle completo en [`docs/adr/ADR-001.md`](docs/adr/ADR-001.md).
 
+### Decisión 4: la regla de arquitectura distingue estereotipos de Spring de acceso a datos y web
+
+**Elegido.** La Regla 1 de ArchUnit prohíbe que `procesamiento` dependa de `..infraestructura..`, `..adaptadores..`, `org.springframework.data`, `jakarta.persistence`, `org.springframework.web` y `org.springframework.http`. No prohíbe `org.springframework.stereotype`, es decir, `@Component`.
+
+**Alternativa descartada.** Prohibir cualquier dependencia de `org.springframework` en `procesamiento`.
+
+**Por qué.** Lo que la regla protege es que los patrones no queden atados a la persistencia ni a la web. `@Component` solo marca una clase para el escaneo de Spring y no introduce ese acoplamiento: validadores, calculadoras y notificadores se prueban con `new`, sin contexto de Spring, como hacen las pruebas unitarias del proyecto. Una prohibición total obligaría a registrar cada clase en una configuración aparte, y se perdería el mecanismo de la Decisión 2: que Spring inyecte `List<CalculadoraReembolso>` con todas las implementaciones.
+
+**Qué se pierde.** `procesamiento` sigue importando una anotación de Spring. Se acepta: es el mismo coste que cualquier proyecto Spring paga por su inyección de dependencias y no impide ejecutar las clases fuera del framework.
+
+**Alcance de las reglas 3 y 4.** Se aplican a clases cuyo nombre empieza por `Calculadora` o `Notificador`, para no exigir la interfaz a clases de apoyo como `SelectorCalculadora`. Una calculadora con otro nombre escaparía a la regla; en ese caso la convención de nombres es parte de la norma.
+
+
 ## Cómo ejecutar
 
 ```bash
@@ -119,3 +132,130 @@ Para correr los tests:
 ```bash
 mvn test
 ```
+
+
+## Qué se descartó y por qué
+
+Para cada alternativa se aplicó el criterio de la Guía (sección 4.2): ¿la variabilidad que la justificaría es real y está documentada hoy, o es especulación sobre un futuro que aún no llegó? Ningún descarte es definitivo: cada uno indica qué señal haría reconsiderarlo.
+
+### 1. `ApplicationEventPublisher` en lugar de una lista de observadores
+
+**Qué se consideró.** Publicar un evento de dominio (`CambioEstadoEvent`) con `ApplicationEventPublisher` y suscribir a cada interesado con `@EventListener`, que era lo propuesto en "Diseño Propuesto".
+
+**Por qué se descartó.** Hay exactamente tres observadores fijos y conocidos en tiempo de compilación. La interfaz `ObservadorCambioEstado` ya desacopla al servicio de cada notificador, y un bus de eventos genérico solo añade una indirección que dificulta rastrear quién reacciona a qué cambio.
+
+**Señal para reconsiderar.** Que los observadores crezcan o vivan en módulos que no deban conocerse entre sí, o que alguno necesite `@Async` o `@TransactionalEventListener`.
+
+### 2. Visitor o Abstract Factory para exportar reportes en varios formatos
+
+**Qué se consideró.** Anticipar que Contabilidad pediría exportar el historial en PDF y Excel además de CSV, y construir desde ahora una jerarquía de exportadores.
+
+**Por qué se descartó.** Hoy solo existe el requisito de CSV. Sin una segunda solicitud real de otro formato no se cumple la Rule of Three (Guía, sección 4.2), así que la abstracción resolvería un problema que no existe.
+
+**Señal para reconsiderar.** Que Contabilidad pida un segundo formato real; con el tercero ya estaría justificada la abstracción.
+
+### 3. `Supplier` perezoso para la lista de pendientes (propio)
+
+**Qué se consideró.** Pasar a la cadena de validación un `Supplier<List<SolicitudReembolso>>` en lugar de la lista ya cargada, para consultar los pendientes solo si los validadores anteriores no rechazaron la solicitud.
+
+**Por qué se descartó.** Ahorra una consulta por solicitud rechazada, pero complica la firma de la cadena y de sus pruebas. Con una lista corta por empleado, el ahorro no justifica la complejidad.
+
+**Señal para reconsiderar.** Una medición que muestre esa consulta como cuello de botella, o historiales por empleado de miles de registros.
+
+### 4. Topes mensual y anual acumulados en las calculadoras (propio)
+
+**Qué se consideró.** Que `CalculadoraRepresentacion` y `CalculadoraCapacitacion` descuenten lo ya reembolsado en el mes o el año antes de aplicar el tope.
+
+**Por qué se descartó.** Obligaría a inyectar un repositorio en cada estrategia, mezclando cálculo con acceso a datos. El enunciado no confirma que el acumulado sea una regla de negocio y no una descripción aproximada, así que los topes se aplican por solicitud.
+
+**Señal para reconsiderar.** Que Finanzas confirme que el tope es acumulado. Ahí convendría pasar el acumulado a la calculadora como dato ya calculado, sin que acceda a la base de datos.
+
+### 5. Máquina de estados para las transiciones (propio)
+
+**Qué se consideró.** Un patrón State o una tabla de transiciones permitidas, para impedir, por ejemplo, aprobar dos veces una solicitud ya aprobada, caso en que Contabilidad programaría dos pagos.
+
+**Por qué se descartó.** El enunciado no define qué transiciones son válidas, e inventarlas sería especular reglas de negocio. Es un hueco funcional conocido más que sobreingeniería, y se deja documentado como riesgo.
+
+**Señal para reconsiderar.** Que Finanzas defina las transiciones válidas, o que se detecte un pago duplicado. Debería resolverse antes de producción.
+
+### 6. DTOs de entrada y salida en el controlador (propio)
+
+**Qué se consideró.** Objetos de request y response separados del modelo de dominio, con un mapper.
+
+**Por qué se descartó.** Hay un solo cliente y ninguna API pública. Los DTOs añadirían clases y un mapeo que mantener sin un consumidor que lo exija.
+
+**Señal para reconsiderar.** Que la API se abra a terceros, o que haga falta impedir que el cliente fije campos que calcula el servidor (como `montoAprobado` o `estado` en el POST).
+
+Evidencia:
+![img.png](img.png)
+
+
+
+## Pipeline de validación arquitectónica
+
+El workflow `.github/workflows/arquitectura.yml` ejecuta en cada push y pull request las reglas de arquitectura y luego la suite completa, con Java 17.
+
+### Evidencia
+
+1. **Build fallido por la violación intencional** (una clase de `procesamiento` importa una clase de `infraestructura`, rompiendo la Regla 1):
+   ![Build fallido](docs/img/pipeline-fallido.png)
+2. **Build en verde tras el `git revert`:**
+   ![Build en verde](docs/img/pipeline-verde.png)
+## Qué se descartó y por qué
+
+Para cada alternativa se aplicó el criterio de la Guía (sección 4.2): ¿la variabilidad que la justificaría es real y está documentada hoy, o es especulación sobre un futuro que aún no llegó? Ningún descarte es definitivo: cada uno indica qué señal haría reconsiderarlo.
+
+### 1. `ApplicationEventPublisher` en lugar de una lista de observadores
+
+**Qué se consideró.** Publicar un evento de dominio con `ApplicationEventPublisher` y suscribir a cada interesado con `@EventListener`, que era lo propuesto en "Diseño Propuesto".
+
+**Por qué se descartó.** Hay exactamente tres observadores fijos y conocidos en tiempo de compilación. La interfaz `ObservadorCambioEstado` ya desacopla al servicio de cada notificador, y un bus de eventos genérico solo añade una indirección que dificulta rastrear quién reacciona a qué cambio.
+
+**Señal para reconsiderar.** Que los observadores crezcan o vivan en módulos que no deban conocerse entre sí, o que alguno necesite `@Async` o `@TransactionalEventListener`.
+
+### 2. Visitor o Abstract Factory para exportar reportes en varios formatos
+
+**Qué se consideró.** Anticipar que Contabilidad pediría exportar el historial en PDF y Excel además de CSV, y construir desde ahora una jerarquía de exportadores.
+
+**Por qué se descartó.** Hoy solo existe el requisito de CSV. Sin una segunda solicitud real de otro formato no se cumple la Rule of Three (Guía, sección 4.2), así que la abstracción resolvería un problema que no existe.
+
+**Señal para reconsiderar.** Que Contabilidad pida un segundo formato real; con el tercero ya estaría justificada la abstracción.
+
+### 3. `Supplier` perezoso para la lista de pendientes (propio)
+
+**Qué se consideró.** Pasar a la cadena de validación un `Supplier<List<SolicitudReembolso>>` en lugar de la lista ya cargada, para consultar los pendientes solo si los validadores anteriores no rechazaron la solicitud.
+
+**Por qué se descartó.** Ahorra una consulta por solicitud rechazada, pero complica la firma de la cadena y de sus pruebas. Con una lista corta por empleado, el ahorro no justifica la complejidad.
+
+**Señal para reconsiderar.** Una medición que muestre esa consulta como cuello de botella, o historiales por empleado de miles de registros.
+
+### 4. Topes mensual y anual acumulados en las calculadoras (propio)
+
+**Qué se consideró.** Que `CalculadoraRepresentacion` y `CalculadoraCapacitacion` descuenten lo ya reembolsado en el mes o el año antes de aplicar el tope.
+
+**Por qué se descartó.** Obligaría a inyectar un repositorio en cada estrategia, mezclando cálculo con acceso a datos. El enunciado no confirma que el acumulado sea una regla de negocio y no una descripción aproximada, así que los topes se aplican por solicitud.
+
+**Señal para reconsiderar.** Que Finanzas confirme que el tope es acumulado. Ahí convendría pasar el acumulado a la calculadora como dato ya calculado, sin que acceda a la base de datos.
+
+### 5. Máquina de estados para las transiciones (propio)
+
+**Qué se consideró.** Un patrón State o una tabla de transiciones permitidas, para impedir, por ejemplo, aprobar dos veces una solicitud ya aprobada, caso en que Contabilidad programaría dos pagos.
+
+**Por qué se descartó.** El enunciado no define qué transiciones son válidas, e inventarlas sería especular reglas de negocio. Es un hueco funcional conocido más que sobreingeniería, y se deja documentado como riesgo.
+
+**Señal para reconsiderar.** Que Finanzas defina las transiciones válidas, o que se detecte un pago duplicado. Debería resolverse antes de producción.
+
+### 6. DTOs de entrada y salida en el controlador (propio)
+
+**Qué se consideró.** Objetos de request y response separados del modelo de dominio, con un mapper.
+
+**Por qué se descartó.** Hay un solo cliente y ninguna API pública. Los DTOs añadirían clases y un mapeo que mantener sin un consumidor que lo exija.
+
+**Señal para reconsiderar.** Que la API se abra a terceros, o que haga falta impedir que el cliente fije campos que calcula el servidor (como `montoAprobado` o `estado` en el `POST`).
+
+## Limitaciones conocidas
+
+- **Notificación síncrona sin aislamiento de fallos.** Si un observador lanza una excepción, los siguientes no se ejecutan (ver ADR-001).
+- **Topes por solicitud, no acumulados**, en representación y capacitación.
+- **Tope de VIAJE.** El validador limita el monto total de un viaje y la calculadora aplica un tope diario por los días del viaje; el tope más restrictivo es el que rige en la práctica. Conviene alinearlos con Finanzas.
+- **Cualquier transición de estado es válida**, incluida aprobar dos veces la misma solicitud.
